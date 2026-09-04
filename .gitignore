@@ -1,0 +1,9 @@
+.env
+*.env
+.venv/
+__pycache__/
+*.pyc
+proxy-hunter/data/*.json
+proxy-hunter/data/*.txt
+!proxy-hunter/data/.gitkeep
+*.log
