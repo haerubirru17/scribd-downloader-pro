@@ -272,29 +272,106 @@ def download_scribd_pdf(url, progress=None, chat_id=None, status_msg_id=None):
 
 # ==================== GARAP PROXY ====================
 
+def make_bar(current, total, length=10):
+    filled = int(length * current / total) if total > 0 else 0
+    return "█" * filled + "░" * (length - filled)
+
+
 def _hunt_core(chat_id, announce=True):
+    card_msg_id = None
     if announce:
-        send(chat_id, "🎯 <b>Garap proxy dimulai...</b>\n±6.000 proxy free dicek ke Scribd + B.ai. Butuh ±5-6 menit, sabar ya.")
+        init_res = send_msg(
+            chat_id,
+            "🎯 <b>Garap Proxy Scribd Dimulai...</b>\n"
+            "──────────────────────────\n"
+            "🔍 Mengumpulkan ~5.700 IP proxy publik...\n"
+            "⏳ <i>Menyiapkan validasi multi-threaded...</i>",
+            reply_markup=back_keyboard()
+        )
+        card_msg_id = (init_res or {}).get("result", {}).get("message_id")
+
     if not HUNT_LOCK.acquire(blocking=False):
         if announce:
-            send(chat_id, "⏳ Garap lain sedang berjalan — hasilnya akan dipakai otomatis.")
+            send_msg(chat_id, "⏳ <b>Garap Sedang Berjalan</b>\nProses lain sedang berlangsung. Hasilnya akan langsung dipakai otomatis.", reply_markup=back_keyboard())
         return
-    try:
-        h = ph.hunt(DATA_DIR)
-        if not h or not (h["both"] or h["bai"] or h["scribd"]):
-            send(chat_id, "❌ Tidak ada proxy lolos. Coba lagi nanti.")
+
+    t_start = time.time()
+    last_update = 0.0
+
+    def progress_callback(checked, total, passed, elapsed):
+        nonlocal last_update
+        now = time.time()
+        if not card_msg_id or (now - last_update < 4.0 and checked != total):
             return
-        send(chat_id, ph.format_summary(h))
-        send_file(chat_id, ph.save_txt(h, DATA_DIR),
-                  caption=f"📎 {len(h['both'])} lolos semua · {len(h['bai'])} bai · {len(h['scribd'])} scribd")
+        last_update = now
+
+        pct = int(checked * 100 / total) if total > 0 else 0
+        bar = make_bar(checked, total, 10)
+        mins = int(elapsed // 60)
+        secs = int(elapsed % 60)
+        time_str = f"{mins:02d}:{secs:02d}"
+
+        card_text = (
+            f"🎯 <b>Garap Proxy Scribd</b>\n"
+            f"──────────────────────────\n"
+            f"📊 Progres : [{bar}] <b>{pct}%</b>\n"
+            f"🔍 Diperiksa : <b>{checked}/{total}</b> IP\n"
+            f"⚡ Lolos WAF : <b>{passed}</b> Proxy Aktif\n"
+            f"⏱ Waktu     : <code>{time_str}</code>\n"
+            f"⏳ Status   : <i>Memvalidasi koneksi ke Scribd...</i>"
+        )
+        tg_req("editMessageText", {
+            "chat_id": chat_id,
+            "message_id": card_msg_id,
+            "text": card_text,
+            "parse_mode": "HTML",
+            "reply_markup": back_keyboard()
+        })
+
+    try:
+        h = ph.hunt(DATA_DIR, progress_cb=progress_callback if card_msg_id else None)
+        total_elapsed = time.time() - t_start
+
+        if not h or not h.get("scribd"):
+            msg_fail = "❌ <b>Garap Gagal</b>\nTidak ada proxy yang lolos uji WAF. Silakan coba beberapa saat lagi."
+            if card_msg_id:
+                tg_req("editMessageText", {"chat_id": chat_id, "message_id": card_msg_id, "text": msg_fail, "parse_mode": "HTML", "reply_markup": back_keyboard()})
+            else:
+                send_msg(chat_id, msg_fail, reply_markup=back_keyboard())
+            return
+
+        summary_text = ph.format_summary(h, total_elapsed)
+        after_hunt_markup = {
+            "inline_keyboard": [
+                [{"text": "📥 Unduh Dokumen Sekarang", "callback_data": "btn_start"}],
+                [{"text": "📊 Cek Status Stok", "callback_data": "btn_status"}]
+            ]
+        }
+
+        if card_msg_id:
+            tg_req("editMessageText", {
+                "chat_id": chat_id,
+                "message_id": card_msg_id,
+                "text": summary_text,
+                "parse_mode": "HTML",
+                "reply_markup": after_hunt_markup
+            })
+        else:
+            send_msg(chat_id, summary_text, reply_markup=after_hunt_markup)
+
     except Exception as e:
-        send(chat_id, f"❌ Error garap: {e}")
+        err_text = f"❌ <b>Error Garap Proxy:</b> {e}"
+        if card_msg_id:
+            tg_req("editMessageText", {"chat_id": chat_id, "message_id": card_msg_id, "text": err_text, "parse_mode": "HTML", "reply_markup": back_keyboard()})
+        else:
+            send_msg(chat_id, err_text, reply_markup=back_keyboard())
     finally:
         HUNT_LOCK.release()
 
 
 def run_hunt(chat_id):
     if chat_id in HUNTING:
+        send_msg(chat_id, "⏳ <b>Garap Sedang Berjalan</b>\nMohon tunggu hingga proses selesai.", reply_markup=back_keyboard())
         return
     HUNTING.add(chat_id)
     try:
