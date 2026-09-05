@@ -64,7 +64,10 @@ def search_scribd_book(title, author=""):
         "Content-Type": "application/x-www-form-urlencoded"
     })
 
-    BLACKLIST_KEYWORDS = {"makalah", "jurnal", "skripsi", "tugas", "resensi", "sinopsis", "rpp", "silabus", "soal", "bab-1"}
+    BLACKLIST_KEYWORDS = {
+        "makalah", "jurnal", "skripsi", "tugas", "resensi", "sinopsis", "rpp", 
+        "silabus", "soal", "bab-1", "bab-2", "alih-kode", "analisis", "penelitian"
+    }
     title_words = set(re.findall(r'\w+', title.lower()))
     author_words = set(re.findall(r'\w+', author.lower())) if author else set()
 
@@ -105,13 +108,28 @@ def search_scribd_book(title, author=""):
     return candidates[:3]
 
 
+def is_title_matched(query, doc_title, identifier):
+    """Verifikasi ketat apakah dokumen benar-benar buku yang dicari (bukan dokumen acak)."""
+    q_clean = query.lower()
+    q_words = [w for w in re.findall(r'[a-zA-Z0-9]+', q_clean) if len(w) > 2]
+    if not q_words:
+        return True
+    
+    target_str = f"{doc_title} {identifier}".lower()
+    
+    # Minimal 60% kata kunci wajib ada di judul atau identifier
+    matched = sum(1 for w in q_words if w in target_str)
+    ratio = matched / len(q_words)
+    return ratio >= 0.5 or (len(q_words) >= 2 and all(w in target_str for w in q_words[:2]))
+
+
 def search_books(query, limit=5):
-    """Cari buku di repository open access dengan fallback kata kunci bertingkat."""
+    """Cari buku di repository open access dengan strict title relevance matching."""
     clean_q = clean_query(query)
     if not clean_q:
         return []
 
-    # Buat variasi query (Judul Lengkap -> Judul Pendek sebelum tanda baca)
+    # Buat variasi query
     queries_to_try = [clean_q]
     if ":" in clean_q:
         queries_to_try.append(clean_q.split(":")[0].strip())
@@ -127,16 +145,17 @@ def search_books(query, limit=5):
             continue
 
         safe_q = urllib.parse.quote(safe_terms)
+        # Gunakan title: filter untuk menghindari dokumen artikel sampah
         search_url = (
             f"https://archive.org/advancedsearch.php?"
-            f"q=({safe_q})+AND+mediatype:(texts)&"
+            f"q=title:({safe_q})+AND+mediatype:(texts)&"
             f"fl[]=identifier,title,creator,year,publicdate,downloads,item_size&"
-            f"sort[]=downloads+desc&rows={limit * 5}&output=json"
+            f"sort[]=downloads+desc&rows={limit * 3}&output=json"
         )
 
         try:
             req = urllib.request.Request(search_url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 docs = data.get("response", {}).get("docs", [])
                 
@@ -144,6 +163,10 @@ def search_books(query, limit=5):
                     identifier = doc.get("identifier")
                     doc_title = doc.get("title", "")
                     if not identifier or identifier in seen_identifiers:
+                        continue
+                    
+                    # Strict validation: judul harus cocok dengan query
+                    if not is_title_matched(q_try, doc_title, identifier):
                         continue
                     
                     # Fetch metadata files
@@ -167,7 +190,7 @@ def search_books(query, limit=5):
                                 fsize = int(f.get("size", 0))
                                 ext = fname.split(".")[-1].lower()
                                 
-                                if ext in ("pdf", "epub") and fsize > 150000:
+                                if ext in ("pdf", "epub") and fsize > 200000:
                                     check_str = f"{identifier} {fname} {doc_title}".lower()
                                     
                                     if "grammar" in check_str and "grammar" not in q_try.lower():
