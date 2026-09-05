@@ -301,7 +301,7 @@ BOOK_SEARCH_CACHE = {}
 
 
 def handle_book_search(chat_id, raw_input):
-    """Cari e-book gratis dengan flow informatif & auto-fallback cerdas ke Scribd."""
+    """Cari e-book secara PARALEL di Open Archive dan Scribd secara serentak."""
     # 1. Ekstrak metadata info dari link atau query
     meta = book_res.get_google_book_info(raw_input)
     book_title = meta.get("title") or raw_input.strip()
@@ -313,89 +313,77 @@ def handle_book_search(chat_id, raw_input):
         f"📖 <b>Informasi Buku Terdeteksi:</b>\n"
         f"──────────────────────────\n"
         f"📚 <b>Judul:</b> {book_title}{author_str}\n\n"
-        f"⏳ <i>[1/2] Menelusuri database arsip terbuka (PDF/EPUB)...</i>",
+        f"⚡ <i>Menelusuri Open Archive & Scribd secara serentak...</i>",
         reply_markup=back_keyboard()
     )
     status_id = (status_msg or {}).get("result", {}).get("message_id")
 
-    # 2. Cek database arsip terbuka (Archive.org)
-    results = book_res.search_books(book_title, author=book_author, limit=5)
-    
-    # 3. Jika Tidak Ada di Arsip Terbuka -> OTOMATIS FALLBACK KE SCRIBD ENGINE
-    if not results:
+    # 2. Parallel Dual-Search (Archive.org & Scribd jalan bersamaan)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        f_archive = executor.submit(book_res.search_books, book_title, book_author, 5)
+        f_scribd = executor.submit(book_res.search_scribd_book, book_title, book_author)
+        results = f_archive.result()
+        scribd_candidates = f_scribd.result()
+
+    # 3. Prioritas 1: Jika ada di Archive.org (EPUB/PDF Asli Instan) -> Tampilkan Opsi Unduh
+    if results:
+        buttons = []
+        text_lines = [
+            f"📚 <b>E-Book Ditemukan & Siap Unduh!</b>\n"
+            f"──────────────────────────\n"
+            f"📖 <b>Judul:</b> {book_title}{author_str}\n\n"
+            f"<i>Pilih versi & format dokumen di bawah:</i>\n"
+        ]
+        for i, b in enumerate(results):
+            cache_key = f"{chat_id}_{i}"
+            BOOK_SEARCH_CACHE[cache_key] = b
+            text_lines.append(f"<b>{i+1}. {b['title'][:38]}</b>")
+            text_lines.append(f"   📁 {b['format']} ({b['size_mb']} MB) • 📅 {b['year']}")
+            
+            btn_label = f"📥 Unduh {b['format']} ({b['size_mb']} MB)"
+            buttons.append([{"text": btn_label, "callback_data": f"dl_book_{i}"}])
+
+        buttons.append([{"text": "🔙 Kembali ke Menu Utama", "callback_data": "btn_start"}])
+
+        card_text = "\n".join(text_lines)
+        if status_id:
+            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": card_text, "parse_mode": "HTML", "reply_markup": {"inline_keyboard": buttons}})
+        else:
+            send_msg(chat_id, card_text, reply_markup={"inline_keyboard": buttons})
+        return
+
+    # 4. Prioritas 2: Jika tidak ada di Archive tapi ada di Scribd -> Langsung Auto-Download HD
+    if scribd_candidates:
+        best_doc = scribd_candidates[0]
         if status_id:
             tg_req("editMessageText", {
                 "chat_id": chat_id,
                 "message_id": status_id,
-                "text": f"📖 <b>Informasi Buku Terdeteksi:</b>\n"
+                "text": f"📖 <b>Dokumen Ditemukan di Scribd!</b>\n"
                         f"──────────────────────────\n"
-                        f"📚 <b>Judul:</b> {book_title}{author_str}\n\n"
-                        f"🔄 <i>Arsip open access belum tersedia.</i>\n"
-                        f"⚡ <b>[2/2] Mengalihkan pencarian otomatis ke Scribd Mirror...</b>",
+                        f"📚 <b>Judul:</b> {best_doc['title']}\n"
+                        f"⚡ <b>Mengunduh otomatis via Engine Scribd HD...</b>",
                 "parse_mode": "HTML",
                 "reply_markup": back_keyboard()
             })
-        
-        # Cari dokumen novel asli di Scribd
-        scribd_candidates = book_res.search_scribd_book(book_title, book_author)
-        
-        if scribd_candidates:
-            best_doc = scribd_candidates[0]
-            if status_id:
-                tg_req("editMessageText", {
-                    "chat_id": chat_id,
-                    "message_id": status_id,
-                    "text": f"📖 <b>Dokumen Ditemukan di Scribd!</b>\n"
-                            f"──────────────────────────\n"
-                            f"📚 <b>Judul:</b> {best_doc['title']}\n"
-                            f"⚡ <b>Mengunduh otomatis via Engine Scribd HD...</b>",
-                    "parse_mode": "HTML",
-                    "reply_markup": back_keyboard()
-                })
-            # Langsung download otomatis via engine Scribd
-            threading.Thread(target=run_download, args=(chat_id, best_doc['url'], status_id), daemon=True).start()
-            return
-        
-        # Jika di Scribd juga tidak ada
-        msg_not_found = (
-            f"❌ <b>Dokumen Belum Tersedia</b>\n"
-            f"──────────────────────────\n"
-            f"📖 <b>Judul:</b> {book_title}{author_str}\n\n"
-            f"ℹ️ <b>Penyebab:</b>\n"
-            f"Buku ini belum tersedia di arsip publik maupun Scribd.\n\n"
-            f"💡 <b>Tips:</b>\n"
-            f"Coba cari dengan kata kunci judul lain atau nama penulis."
-        )
-        if status_id:
-            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": msg_not_found, "parse_mode": "HTML", "reply_markup": back_keyboard()})
-        else:
-            send_msg(chat_id, msg_not_found, reply_markup=back_keyboard())
+        threading.Thread(target=run_download, args=(chat_id, best_doc['url'], status_id), daemon=True).start()
         return
 
-    # 4. Tampilkan Pilihan Download jika Berhasil Ditemukan di Arsip Terbuka
-    buttons = []
-    text_lines = [
-        f"📚 <b>E-Book Ditemukan & Siap Unduh!</b>\n"
+    # 5. Jika kedua sumber tidak menemukan dokumen
+    msg_not_found = (
+        f"❌ <b>Dokumen Belum Tersedia</b>\n"
         f"──────────────────────────\n"
         f"📖 <b>Judul:</b> {book_title}{author_str}\n\n"
-        f"<i>Pilih versi & format dokumen di bawah:</i>\n"
-    ]
-    for i, b in enumerate(results):
-        cache_key = f"{chat_id}_{i}"
-        BOOK_SEARCH_CACHE[cache_key] = b
-        text_lines.append(f"<b>{i+1}. {b['title'][:38]}</b>")
-        text_lines.append(f"   📁 {b['format']} ({b['size_mb']} MB) • 📅 {b['year']}")
-        
-        btn_label = f"📥 Unduh {b['format']} ({b['size_mb']} MB)"
-        buttons.append([{"text": btn_label, "callback_data": f"dl_book_{i}"}])
-
-    buttons.append([{"text": "🔙 Kembali ke Menu Utama", "callback_data": "btn_start"}])
-
-    card_text = "\n".join(text_lines)
+        f"ℹ️ <b>Penyebab:</b>\n"
+        f"Buku ini belum tersedia di arsip publik maupun Scribd.\n\n"
+        f"💡 <b>Tips:</b>\n"
+        f"Coba cari dengan kata kunci judul lain atau nama penulis."
+    )
     if status_id:
-        tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": card_text, "parse_mode": "HTML", "reply_markup": {"inline_keyboard": buttons}})
+        tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": msg_not_found, "parse_mode": "HTML", "reply_markup": back_keyboard()})
     else:
-        send_msg(chat_id, card_text, reply_markup={"inline_keyboard": buttons})
+        send_msg(chat_id, msg_not_found, reply_markup=back_keyboard())
 
 
 def handle_book_download(chat_id, idx):
