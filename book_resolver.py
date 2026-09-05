@@ -108,8 +108,8 @@ def search_scribd_book(title, author=""):
     return candidates[:3]
 
 
-def is_title_matched(query, doc_title, identifier):
-    """Verifikasi ketat apakah dokumen benar-benar buku yang dicari (bukan dokumen acak)."""
+def is_title_matched(query, doc_title, identifier, author=""):
+    """Verifikasi ketat kecocokan buku asli (mencegah artikel umum seperti 'sendiri', 'hujan')."""
     q_clean = query.lower()
     q_words = [w for w in re.findall(r'[a-zA-Z0-9]+', q_clean) if len(w) > 2]
     if not q_words:
@@ -117,35 +117,43 @@ def is_title_matched(query, doc_title, identifier):
     
     target_str = f"{doc_title} {identifier}".lower()
     
-    # Minimal 60% kata kunci wajib ada di judul atau identifier
+    # Jika judul sangat pendek (1-2 kata umum, misal 'SENDIRI', 'HUJAN', 'PULANG')
+    # maka nama penulis WAJIB ADA di judul dokumen jika penulis diketahui
+    if len(q_words) <= 2 and author:
+        author_words = [w for w in re.findall(r'[a-zA-Z0-9]+', author.lower()) if len(w) > 2]
+        if author_words and not any(w in target_str for w in author_words):
+            return False
+    
+    # Minimal 60% kata kunci wajib ada di target string
     matched = sum(1 for w in q_words if w in target_str)
     ratio = matched / len(q_words)
-    return ratio >= 0.5 or (len(q_words) >= 2 and all(w in target_str for w in q_words[:2]))
+    return ratio >= 0.6 or (len(q_words) >= 2 and all(w in target_str for w in q_words[:2]))
 
 
-def search_books(query, limit=5):
-    """Cari buku di repository open access dengan strict title relevance matching."""
+def search_books(query, author="", limit=5):
+    """Cari buku di repository open access dengan strict title & author relevance matching."""
     clean_q = clean_query(query)
     if not clean_q:
         return []
 
     # Buat variasi query
     queries_to_try = [clean_q]
-    if ":" in clean_q:
-        queries_to_try.append(clean_q.split(":")[0].strip())
     if "-" in clean_q:
         queries_to_try.append(clean_q.split("-")[0].strip())
+    if ":" in clean_q:
+        queries_to_try.append(clean_q.split(":")[0].strip())
 
     seen_identifiers = set()
     results = []
 
     for q_try in queries_to_try:
-        safe_terms = " ".join(re.findall(r'[a-zA-Z0-9]+', q_try))
+        # Jika ada nama pengarang, sertakan dalam pencarian Archive.org
+        search_terms = f"{q_try} {author}".strip() if author and len(re.findall(r'\w+', q_try)) <= 2 else q_try
+        safe_terms = " ".join(re.findall(r'[a-zA-Z0-9]+', search_terms))
         if not safe_terms or len(safe_terms) < 3:
             continue
 
         safe_q = urllib.parse.quote(safe_terms)
-        # Gunakan title: filter untuk menghindari dokumen artikel sampah
         search_url = (
             f"https://archive.org/advancedsearch.php?"
             f"q=title:({safe_q})+AND+mediatype:(texts)&"
@@ -165,8 +173,8 @@ def search_books(query, limit=5):
                     if not identifier or identifier in seen_identifiers:
                         continue
                     
-                    # Strict validation: judul harus cocok dengan query
-                    if not is_title_matched(q_try, doc_title, identifier):
+                    # Strict validation: judul dan penulis harus cocok
+                    if not is_title_matched(q_try, doc_title, identifier, author):
                         continue
                     
                     # Fetch metadata files
@@ -202,7 +210,7 @@ def search_books(query, limit=5):
                                     size_mb = round(fsize / 1048576, 1)
                                     
                                     title_display = doc_title or fname.replace(f".{ext}", "")
-                                    creator = doc.get("creator") or meta.get("metadata", {}).get("creator", "Penulis / Open Access")
+                                    creator = doc.get("creator") or meta.get("metadata", {}).get("creator", author or "Open Access")
                                     year = doc.get("year") or meta.get("metadata", {}).get("year", "-")
                                     
                                     results.append({

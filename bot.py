@@ -319,7 +319,7 @@ def handle_book_search(chat_id, raw_input):
     status_id = (status_msg or {}).get("result", {}).get("message_id")
 
     # 2. Cek database arsip terbuka (Archive.org)
-    results = book_res.search_books(book_title, limit=5)
+    results = book_res.search_books(book_title, author=book_author, limit=5)
     
     # 3. Jika Tidak Ada di Arsip Terbuka -> OTOMATIS FALLBACK KE SCRIBD ENGINE
     if not results:
