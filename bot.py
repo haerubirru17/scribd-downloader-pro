@@ -241,16 +241,59 @@ def try_download(converted_url, filename, proxy):
 def main_keyboard(chat_id=None):
     buttons = [
         [
-            {"text": "📚 Cari & Unduh E-Book", "callback_data": "btn_buku_prompt"},
-            {"text": "📊 Status Proxy", "callback_data": "btn_status"}
+            {"text": "📄 Mode Scribd", "callback_data": "btn_mode_scribd"},
+            {"text": "📚 Mode E-Book", "callback_data": "btn_mode_ebook"}
         ],
         [
-            {"text": "🎯 Garap Proxy Baru", "callback_data": "btn_cari"}
+            {"text": "📂 Riwayat Unduhan", "callback_data": "btn_history"},
+            {"text": "⚙️ Status & Proxy", "callback_data": "btn_status"}
         ]
     ]
-    if chat_id and get_history(chat_id):
-        buttons.append([{"text": "📂 Direktori History Unduhan", "callback_data": "btn_history"}])
     return {"inline_keyboard": buttons}
+
+
+def main_menu_text():
+    return (
+        "🤖 <b>Universal Book & Document Downloader</b>\n"
+        "───────────────────────────────\n"
+        "Satu bot untuk semua kebutuhan bacaanmu:\n\n"
+        "📄 <b>1. Scribd Downloader</b>\n"
+        "Tempel link dokumen Scribd ➔ PDF HD Utuh (Bebas Watermark & Sensor).\n\n"
+        "📚 <b>2. E-Book Library Resolver</b>\n"
+        "Ketik judul/penulis atau tempel link Google Books ➔ Download PDF / EPUB instan.\n\n"
+        "💡 <i>Ketik judul buku atau tempel link langsung ke chat kapan saja.</i>"
+    )
+
+
+def scribd_guide_text():
+    return (
+        "📄 <b>Scribd Downloader Pro</b>\n"
+        "───────────────────────────────\n"
+        "Kirim link dokumen Scribd langsung ke chat ini:\n"
+        "👉 <i>Contoh:</i>\n"
+        "<code>https://id.scribd.com/document/566968205/Judul</code>\n\n"
+        "✨ <b>Keunggulan:</b>\n"
+        "• 1 File PDF Utuh (Bebas Potongan)\n"
+        "• Resolusi High-DPI 2x Retina\n"
+        "• Anti-Paywall & Render Font Lengkap\n"
+        "• Kompresi Cerdas Standar Premium (~10–15 MB)"
+    )
+
+
+def ebook_guide_text():
+    return (
+        "📚 <b>E-Book Library Resolver</b>\n"
+        "───────────────────────────────\n"
+        "Ketik judul buku, nama penulis, atau link Google Play Books:\n"
+        "👉 <i>Contoh:</i>\n"
+        "• <code>Filosofi Teras</code>\n"
+        "• <code>Atomic Habits</code>\n"
+        "• <code>Tere Liye</code>\n\n"
+        "✨ <b>Keunggulan:</b>\n"
+        "• Pilihan Format PDF / EPUB Asli\n"
+        "• Download Langsung dalam 2–4 Detik\n"
+        "• Koleksi Jutaan Buku Open Access"
+    )
 
 
 # Cache hasil pencarian buku sementara (key: chat_id_idx)
@@ -641,13 +684,25 @@ def status_text():
     age_s = f", digarap {age:.0f} jam lalu" if age is not None else ""
     if pool:
         fastest = pool[0]
-        return (f"📊 <b>Status Scribd Downloader</b>\n\n"
-                f"📄 Stok Proxy Aktif: <b>{len(pool)}</b>{age_s}\n"
-                f"⚡ Proxy Tercepat: <code>{fastest}</code>\n\n"
-                f"💡 <i>Kirim link dokumen Scribd kapan saja untuk langsung mengunduh.</i>")
-    return ("📊 <b>Status Scribd Downloader</b>\n\n"
-            "📄 Stok Proxy: <b>0 (Kosong)</b>\n\n"
+        return (f"⚙️ <b>Status Sistem & Proxy</b>\n"
+                f"───────────────────────────────\n"
+                f"🌐 Proxy Aktif : <b>{len(pool)} IP</b> (Lolos WAF{age_s})\n"
+                f"⚡ Tercepat    : <code>{fastest}</code>\n"
+                f"🖥 Engine      : <b>VPS Worker 16GB (Active)</b>\n\n"
+                f"💡 <i>Gunakan tombol di bawah untuk menyegarkan stok proxy:</i>")
+    return ("⚙️ <b>Status Sistem & Proxy</b>\n"
+            "───────────────────────────────\n"
+            "🌐 Proxy Aktif : <b>0 (Kosong)</b>\n\n"
             "Klik tombol di bawah untuk menggarap proxy gratis baru:")
+
+
+def status_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "🎯 Garap Proxy Baru", "callback_data": "btn_cari"}],
+            [{"text": "🔙 Menu Utama", "callback_data": "btn_start"}]
+        ]
+    }
 
 
 def poll():
@@ -676,18 +731,16 @@ def poll():
                     tg_req("answerCallbackQuery", {"callback_query_id": cb_id})
 
                     if cb_data == "btn_start":
-                        send_msg(cb_chat_id,
-                                 "👋 <b>Scribd Downloader Pro</b>\n\n"
-                                 "📄 <b>Cara Download:</b>\n"
-                                 "Cukup kirimkan link dokumen Scribd langsung ke chat ini, contoh:\n"
-                                 "<code>https://id.scribd.com/document/566968205/Judul-Dokumen</code>\n\n"
-                                 "Bot akan otomatis memproses dokumen menjadi PDF kualitas tinggi (1 file utuh).",
-                                 reply_markup=main_keyboard(cb_chat_id))
+                        send_msg(cb_chat_id, main_menu_text(), reply_markup=main_keyboard(cb_chat_id))
+                    elif cb_data == "btn_mode_scribd":
+                        send_msg(cb_chat_id, scribd_guide_text(), reply_markup=back_keyboard())
+                    elif cb_data == "btn_mode_ebook":
+                        send_msg(cb_chat_id, ebook_guide_text(), reply_markup=back_keyboard())
                     elif cb_data == "btn_status":
-                        send_msg(cb_chat_id, status_text(), reply_markup=main_keyboard(cb_chat_id))
+                        send_msg(cb_chat_id, status_text(), reply_markup=status_keyboard())
                     elif cb_data == "btn_cari":
                         if cb_chat_id in HUNTING:
-                            send_msg(cb_chat_id, "⏳ Garap proxy sedang berjalan. Mohon tunggu...")
+                            send_msg(cb_chat_id, "⏳ Garap proxy sedang berjalan. Mohon tunggu...", reply_markup=back_keyboard())
                         else:
                             threading.Thread(target=run_hunt, args=(cb_chat_id,), daemon=True).start()
                     elif cb_data == "btn_history":
@@ -699,19 +752,6 @@ def poll():
                                      "📂 <b>Direktori Riwayat Unduhan:</b>\n"
                                      "<i>Klik dokumen di bawah untuk mengunduh ulang secara instan:</i>",
                                      reply_markup=history_keyboard(cb_chat_id))
-                    elif cb_data == "btn_buku_prompt":
-                        send_msg(
-                            cb_chat_id,
-                            "📚 <b>Pencarian & Unduh E-Book Gratis</b>\n"
-                            "──────────────────────────\n"
-                            "Ketik perintah <code>/buku [judul atau penulis]</code>\n\n"
-                            "Contoh:\n"
-                            "• <code>/buku Filosofi Teras</code>\n"
-                            "• <code>/buku Atomic Habits</code>\n"
-                            "• <code>/buku Tere Liye</code>\n\n"
-                            "💡 <i>Atau langsung kirim link buku Google Play Books.</i>",
-                            reply_markup=back_keyboard()
-                        )
                     elif cb_data.startswith("dl_book_"):
                         try:
                             idx = int(cb_data.replace("dl_book_", ""))
@@ -748,73 +788,52 @@ def poll():
                 text_lower = raw_text.lower()
 
                 if text_lower.startswith("/start") or text_lower == "start":
-                    send_msg(chat_id,
-                             "👋 <b>Halo! Selamat Datang di Scribd & E-Book Downloader Pro</b>\n\n"
-                             "📄 <b>1. Download Dokumen Scribd:</b>\n"
-                             "Kirim langsung link dokumen Scribd, contoh:\n"
-                             "<code>https://id.scribd.com/document/566968205/Judul</code>\n\n"
-                             "📚 <b>2. Cari & Unduh E-Book Gratis (PDF/EPUB):</b>\n"
-                             "Ketik <code>/buku [judul]</code> atau kirim link Google Play Books, contoh:\n"
-                             "<code>/buku Filosofi Teras</code>\n\n"
-                             "⚡ <i>Semua unduhan otomatis 1 file utuh, bebas watermark & kualitas jernih.</i>",
-                             reply_markup=main_keyboard(chat_id))
+                    send_msg(chat_id, main_menu_text(), reply_markup=main_keyboard(chat_id))
                     continue
 
                 if text_lower.startswith("/status") or text_lower == "status":
-                    send_msg(chat_id, status_text(), reply_markup=main_keyboard())
+                    send_msg(chat_id, status_text(), reply_markup=status_keyboard())
                     continue
 
-                if text_lower.startswith("/cari") or text_lower == "cari":
+                if text_lower == "/cari" or text_lower == "cari":
                     if chat_id in HUNTING:
-                        send_msg(chat_id, "⏳ Garap proxy sedang berjalan, mohon tunggu hingga selesai.")
+                        send_msg(chat_id, "⏳ Garap proxy sedang berjalan, mohon tunggu hingga selesai.", reply_markup=back_keyboard())
                     else:
                         threading.Thread(target=run_hunt, args=(chat_id,), daemon=True).start()
                     continue
 
-                if text_lower.startswith("/buku") or text_lower.startswith("buku "):
-                    q_book = raw_text[5:].strip() if text_lower.startswith("/buku") else raw_text[4:].strip()
-                    if not q_book:
-                        send_msg(
-                            chat_id,
-                            "ℹ️ <b>Format Pencarian Buku:</b>\n"
-                            "Ketik: <code>/buku [judul atau nama penulis]</code>\n\n"
-                            "Contoh:\n"
-                            "• <code>/buku Filosofi Teras</code>\n"
-                            "• <code>/buku Atomic Habits</code>",
-                            reply_markup=main_keyboard(chat_id)
-                        )
-                    else:
-                        threading.Thread(target=handle_book_search, args=(chat_id, q_book), daemon=True).start()
+                # 1. Cek Link Scribd
+                urls_scribd = re.findall(r"https?://(?:[a-zA-Z0-9_-]+\.)?scribd\.com/(?:document|doc)/\d+[^\s]*", raw_text)
+                if urls_scribd:
+                    send_action(chat_id, "typing")
+                    init_msg = send_msg(
+                        chat_id,
+                        "⚡ <b>Memproses Dokumen Scribd...</b>\n"
+                        "──────────────────────────\n"
+                        "🔗 Link Scribd terdeteksi\n"
+                        "🌐 Memilih proxy tercepat & membuka sesi...",
+                        reply_markup=back_keyboard()
+                    )
+                    init_msg_id = (init_msg or {}).get("result", {}).get("message_id")
+                    threading.Thread(target=run_download, args=(chat_id, urls_scribd[0], init_msg_id), daemon=True).start()
                     continue
 
-                # Cek jika input adalah link Google Play Books / Google Books
+                # 2. Cek Link Google Play Books / Google Books
                 if "play.google.com/store/books" in raw_text or "books.google" in raw_text:
                     threading.Thread(target=handle_book_search, args=(chat_id, raw_text), daemon=True).start()
                     continue
 
-                urls = re.findall(r"https?://(?:[a-zA-Z0-9_-]+\.)?scribd\.com/(?:document|doc)/\d+[^\s]*", raw_text)
-                if not urls:
-                    send_msg(chat_id,
-                             "❌ <b>Link Tidak Valid</b>\n"
-                             "Mohon kirimkan link dokumen Scribd yang benar, contoh:\n"
-                             "<code>https://id.scribd.com/document/123456789/Judul</code>",
-                             reply_markup=main_keyboard(chat_id))
-                    continue
-
-                # Instant Feedback (<0.2s): Kirim aksi "typing/upload" di header Telegram + status card seketika
-                send_action(chat_id, "typing")
-                init_msg = send_msg(
-                    chat_id,
-                    "⚡ <b>Memproses Dokumen...</b>\n"
-                    "──────────────────────────\n"
-                    "🔗 Link Scribd terdeteksi\n"
-                    "🌐 Memilih proxy tercepat & membuka sesi...",
-                    reply_markup=back_keyboard()
-                )
-                init_msg_id = (init_msg or {}).get("result", {}).get("message_id")
-
-                # Jalankan download di background thread
-                threading.Thread(target=run_download, args=(chat_id, urls[0], init_msg_id), daemon=True).start()
+                # 3. Smart Fallback: Semua input teks lain (atau /buku, /cari <kata>) otomatis masuk ke pencarian E-Book
+                q_clean = raw_text
+                for prefix in ("/buku ", "buku ", "/cari ", "cari "):
+                    if text_lower.startswith(prefix):
+                        q_clean = raw_text[len(prefix):].strip()
+                        break
+                
+                if q_clean:
+                    threading.Thread(target=handle_book_search, args=(chat_id, q_clean), daemon=True).start()
+                else:
+                    send_msg(chat_id, main_menu_text(), reply_markup=main_keyboard(chat_id))
 
         except Exception as e:
             print(f"Poll loop error: {e}")
