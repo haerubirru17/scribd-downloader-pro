@@ -152,15 +152,26 @@ def send_pdf(chat_id, filepath, caption="", reply_markup=None):
 # ==================== PROXY POOL ====================
 
 def get_proxy_pool():
-    """Proxy lolos Scribd, urut tercepat. None kalau file stok tidak ada."""
+    """Proxy lolos Scribd, deduplikasi & urut tercepat. None kalau file stok tidak ada."""
     try:
         with open(POOL_FILE) as f:
             d = json.load(f)
     except Exception:
         return None
-    pool = d.get("both", []) + d.get("scribd", [])
+    
+    # Ambil list proxy unik
+    raw_pool = d.get("scribd", []) or d.get("both", [])
+    seen = set()
+    pool = []
+    for item in raw_pool:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            p, lat = item[0], item[1]
+            if p not in seen and lat <= 3.5:
+                seen.add(p)
+                pool.append((p, lat))
+    
     pool.sort(key=lambda x: x[1])
-    return [p for p, lat in pool if lat <= 3.0]
+    return [p for p, _ in pool]
 
 
 def pool_age_hours():
