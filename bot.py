@@ -1,10 +1,11 @@
 import os, re, json, time, shutil, tempfile, threading, urllib.request
 from importlib.machinery import SourceFileLoader
 
-# Load scribd core module + proxy-hunter core
+# Load scribd core module + proxy-hunter core + book resolver
 MODULE_PATH = os.path.join(os.path.dirname(__file__), "scribd-downloader.py")
 scribd = SourceFileLoader("scribd", MODULE_PATH).load_module()
 ph = SourceFileLoader("ph", "/home/ubuntu/proxy-hunter/core.py").load_module()
+book_res = SourceFileLoader("book_res", os.path.join(os.path.dirname(__file__), "book_resolver.py")).load_module()
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -240,13 +241,136 @@ def try_download(converted_url, filename, proxy):
 def main_keyboard(chat_id=None):
     buttons = [
         [
-            {"text": "📊 Status Proxy", "callback_data": "btn_status"},
-            {"text": "🎯 Garap Proxy", "callback_data": "btn_cari"}
+            {"text": "📚 Cari & Unduh E-Book", "callback_data": "btn_buku_prompt"},
+            {"text": "📊 Status Proxy", "callback_data": "btn_status"}
+        ],
+        [
+            {"text": "🎯 Garap Proxy Baru", "callback_data": "btn_cari"}
         ]
     ]
     if chat_id and get_history(chat_id):
         buttons.append([{"text": "📂 Direktori History Unduhan", "callback_data": "btn_history"}])
     return {"inline_keyboard": buttons}
+
+
+# Cache hasil pencarian buku sementara (key: chat_id_idx)
+BOOK_SEARCH_CACHE = {}
+
+
+def handle_book_search(chat_id, query):
+    """Cari e-book gratis dan tampilkan card hasil dengan tombol download."""
+    status_msg = send_msg(
+        chat_id,
+        f"🔍 <b>Mencari E-Book:</b> <i>{query[:30]}...</i>\n"
+        f"──────────────────────────\n"
+        f"⏳ Menghubungkan ke arsip open library & repositori publik...",
+        reply_markup=back_keyboard()
+    )
+    status_id = (status_msg or {}).get("result", {}).get("message_id")
+
+    results = book_res.search_books(query, limit=5)
+    if not results:
+        msg_not_found = (
+            f"❌ <b>E-Book Tidak Ditemukan</b>\n\n"
+            f"Tidak ditemukan file buku untuk: <code>{query}</code>\n"
+            f"💡 <i>Tips: Coba gunakan kata kunci judul yang lebih spesifik atau nama penulis.</i>"
+        )
+        if status_id:
+            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": msg_not_found, "parse_mode": "HTML", "reply_markup": back_keyboard()})
+        else:
+            send_msg(chat_id, msg_not_found, reply_markup=back_keyboard())
+        return
+
+    # Buat tombol download per buku
+    buttons = []
+    text_lines = [
+        f"📚 <b>Hasil Pencarian E-Book:</b>",
+        f"<i>Ditemukan {len(results)} dokumen siap unduh:</i>\n"
+    ]
+    for i, b in enumerate(results):
+        cache_key = f"{chat_id}_{i}"
+        BOOK_SEARCH_CACHE[cache_key] = b
+        text_lines.append(f"<b>{i+1}. {b['title'][:40]}</b>")
+        text_lines.append(f"   ✍️ {b['creator']} • 📅 {b['year']} • 📁 {b['format']} ({b['size_mb']} MB)")
+        
+        btn_label = f"📥 {i+1}. Unduh [{b['format']} - {b['size_mb']} MB]"
+        buttons.append([{"text": btn_label, "callback_data": f"dl_book_{i}"}])
+
+    buttons.append([{"text": "🔙 Kembali ke Menu Utama", "callback_data": "btn_start"}])
+
+    card_text = "\n".join(text_lines)
+    if status_id:
+        tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": card_text, "parse_mode": "HTML", "reply_markup": {"inline_keyboard": buttons}})
+    else:
+        send_msg(chat_id, card_text, reply_markup={"inline_keyboard": buttons})
+
+
+def handle_book_download(chat_id, idx):
+    """Download stream file e-book dan kirim ke Telegram."""
+    cache_key = f"{chat_id}_{idx}"
+    book_info = BOOK_SEARCH_CACHE.get(cache_key)
+    if not book_info:
+        send_msg(chat_id, "❌ Sesi pencarian telah kedaluwarsa. Silakan cari ulang bukunya.", reply_markup=main_keyboard(chat_id))
+        return
+
+    title = book_info["title"]
+    fmt = book_info["format"].lower()
+    dl_url = book_info["download_url"]
+    
+    status_msg = send_msg(
+        chat_id,
+        f"⚡ <b>Mengunduh E-Book...</b>\n"
+        f"──────────────────────────\n"
+        f"📖 <b>{title[:35]}</b>\n"
+        f"📁 Format: <code>{fmt.upper()}</code> ({book_info['size_mb']} MB)\n"
+        f"⏳ <i>Mengambil data dari server arsip...</i>",
+        reply_markup=back_keyboard()
+    )
+    status_id = (status_msg or {}).get("result", {}).get("message_id")
+
+    spool_dir = "/dev/shm" if os.path.exists("/dev/shm") and os.access("/dev/shm", os.W_OK) else "/tmp"
+    safe_filename = re.sub(r'[\\/*?:"<>|]', "", title)[:50] + f".{fmt}"
+    dest_path = os.path.join(spool_dir, safe_filename)
+
+    try:
+        ok = book_res.download_book_stream(dl_url, dest_path)
+        if not ok or not os.path.exists(dest_path):
+            send_msg(chat_id, "❌ Gagal mengunduh file dari server arsip. Silakan coba link mirror lain.", reply_markup=back_keyboard())
+            return
+
+        sz_mb = round(os.path.getsize(dest_path) / 1048576, 1)
+        if status_id:
+            tg_req("editMessageText", {
+                "chat_id": chat_id, "message_id": status_id,
+                "text": f"📦 <b>File Siap ({sz_mb} MB)</b>\n📤 Mengunggah ke Telegram...",
+                "parse_mode": "HTML"
+            })
+
+        caption_text = (
+            f"✅ <b>E-Book Berhasil Diunduh!</b>\n\n"
+            f"📖 <b>Judul:</b> {title}\n"
+            f"✍️ <b>Penulis:</b> {book_info['creator']}\n"
+            f"📁 <b>Ukuran:</b> <code>{sz_mb} MB</code> ({fmt.upper()})\n"
+            f"✨ <i>Buku lengkap & bebas watermark</i>"
+        )
+
+        r = send_pdf(chat_id, dest_path, caption=caption_text, reply_markup=after_download_keyboard())
+        if r and r.get("ok"):
+            doc_obj = r.get("result", {}).get("document", {})
+            file_id = doc_obj.get("file_id")
+            if file_id:
+                save_history(chat_id, safe_filename, sz_mb, file_id)
+            if status_id:
+                tg_req("deleteMessage", {"chat_id": chat_id, "message_id": status_id})
+        else:
+            send_msg(chat_id, "❌ Gagal mengirim file ke Telegram.", reply_markup=back_keyboard())
+
+    except Exception as e:
+        send_msg(chat_id, f"❌ Error download e-book: {e}", reply_markup=back_keyboard())
+    finally:
+        if os.path.exists(dest_path):
+            try: os.remove(dest_path)
+            except Exception: pass
 
 
 def download_scribd_pdf(url, progress=None, chat_id=None, status_msg_id=None):
@@ -569,12 +693,31 @@ def poll():
                     elif cb_data == "btn_history":
                         hist = get_history(cb_chat_id)
                         if not hist:
-                            send_msg(cb_chat_id, "📭 <b>Belum ada riwayat unduhan.</b>\nKirim link dokumen Scribd untuk mulai mengunduh!", reply_markup=main_keyboard(cb_chat_id))
+                            send_msg(cb_chat_id, "📭 <b>Belum ada riwayat unduhan.</b>\nKirim link dokumen Scribd atau cari buku untuk mulai mengunduh!", reply_markup=main_keyboard(cb_chat_id))
                         else:
                             send_msg(cb_chat_id,
                                      "📂 <b>Direktori Riwayat Unduhan:</b>\n"
                                      "<i>Klik dokumen di bawah untuk mengunduh ulang secara instan:</i>",
                                      reply_markup=history_keyboard(cb_chat_id))
+                    elif cb_data == "btn_buku_prompt":
+                        send_msg(
+                            cb_chat_id,
+                            "📚 <b>Pencarian & Unduh E-Book Gratis</b>\n"
+                            "──────────────────────────\n"
+                            "Ketik perintah <code>/buku [judul atau penulis]</code>\n\n"
+                            "Contoh:\n"
+                            "• <code>/buku Filosofi Teras</code>\n"
+                            "• <code>/buku Atomic Habits</code>\n"
+                            "• <code>/buku Tere Liye</code>\n\n"
+                            "💡 <i>Atau langsung kirim link buku Google Play Books.</i>",
+                            reply_markup=back_keyboard()
+                        )
+                    elif cb_data.startswith("dl_book_"):
+                        try:
+                            idx = int(cb_data.replace("dl_book_", ""))
+                            threading.Thread(target=handle_book_download, args=(cb_chat_id, idx), daemon=True).start()
+                        except Exception as e:
+                            print(f"Error triggering book download: {e}")
                     elif cb_data.startswith("dl_hist_"):
                         try:
                             idx = int(cb_data.replace("dl_hist_", ""))
@@ -606,12 +749,15 @@ def poll():
 
                 if text_lower.startswith("/start") or text_lower == "start":
                     send_msg(chat_id,
-                             "👋 <b>Halo! Selamat Datang di Scribd Downloader Pro</b>\n\n"
-                             "📄 <b>Cara Download:</b>\n"
-                             "Cukup kirimkan link dokumen Scribd langsung ke chat ini, contoh:\n"
-                             "<code>https://id.scribd.com/document/566968205/Judul-Dokumen</code>\n\n"
-                             "Bot akan otomatis memproses dokumen menjadi PDF kualitas tinggi (1 file utuh).",
-                             reply_markup=main_keyboard())
+                             "👋 <b>Halo! Selamat Datang di Scribd & E-Book Downloader Pro</b>\n\n"
+                             "📄 <b>1. Download Dokumen Scribd:</b>\n"
+                             "Kirim langsung link dokumen Scribd, contoh:\n"
+                             "<code>https://id.scribd.com/document/566968205/Judul</code>\n\n"
+                             "📚 <b>2. Cari & Unduh E-Book Gratis (PDF/EPUB):</b>\n"
+                             "Ketik <code>/buku [judul]</code> atau kirim link Google Play Books, contoh:\n"
+                             "<code>/buku Filosofi Teras</code>\n\n"
+                             "⚡ <i>Semua unduhan otomatis 1 file utuh, bebas watermark & kualitas jernih.</i>",
+                             reply_markup=main_keyboard(chat_id))
                     continue
 
                 if text_lower.startswith("/status") or text_lower == "status":
@@ -623,6 +769,27 @@ def poll():
                         send_msg(chat_id, "⏳ Garap proxy sedang berjalan, mohon tunggu hingga selesai.")
                     else:
                         threading.Thread(target=run_hunt, args=(chat_id,), daemon=True).start()
+                    continue
+
+                if text_lower.startswith("/buku") or text_lower.startswith("buku "):
+                    q_book = raw_text[5:].strip() if text_lower.startswith("/buku") else raw_text[4:].strip()
+                    if not q_book:
+                        send_msg(
+                            chat_id,
+                            "ℹ️ <b>Format Pencarian Buku:</b>\n"
+                            "Ketik: <code>/buku [judul atau nama penulis]</code>\n\n"
+                            "Contoh:\n"
+                            "• <code>/buku Filosofi Teras</code>\n"
+                            "• <code>/buku Atomic Habits</code>",
+                            reply_markup=main_keyboard(chat_id)
+                        )
+                    else:
+                        threading.Thread(target=handle_book_search, args=(chat_id, q_book), daemon=True).start()
+                    continue
+
+                # Cek jika input adalah link Google Play Books / Google Books
+                if "play.google.com/store/books" in raw_text or "books.google" in raw_text:
+                    threading.Thread(target=handle_book_search, args=(chat_id, raw_text), daemon=True).start()
                     continue
 
                 urls = re.findall(r"https?://(?:[a-zA-Z0-9_-]+\.)?scribd\.com/(?:document|doc)/\d+[^\s]*", raw_text)
