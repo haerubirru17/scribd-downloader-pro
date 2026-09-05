@@ -221,15 +221,15 @@ def try_download(converted_url, filename, proxy):
             scribd.hide_cookie_dialogs(driver)
             total_pages = driver.execute_script("return document.querySelectorAll('.outer_page').length;")
             if total_pages == 0:
-                return None, "406/blok"  # WAF atau proxy mati — rotasi
+                return None, "Dokumen kosong / Takedown DMCA"
 
             scribd.prepare_document_for_print(driver)
             scribd.inject_print_styles(driver)
             driver.execute_script("window.scrollTo(0, 0)")
 
             saved_path = scribd.save_pdf_pages_individually(driver, out_path)
-            if not saved_path or not os.path.exists(saved_path):
-                return None, "export gagal"
+            if not saved_path or not os.path.exists(saved_path) or os.path.getsize(saved_path) < 100000:
+                return None, "File PDF tidak valid / 0 halaman"
             return saved_path, None
         except Exception as e:
             return None, str(e)[:80]
@@ -353,22 +353,45 @@ def handle_book_search(chat_id, raw_input):
             send_msg(chat_id, card_text, reply_markup={"inline_keyboard": buttons})
         return
 
-    # 4. Prioritas 2: Jika tidak ada di Archive tapi ada di Scribd -> Langsung Auto-Download HD
+    # 4. Prioritas 2: Jika tidak ada di Archive tapi ada di Scribd -> Coba kandidat Scribd yang valid
     if scribd_candidates:
-        best_doc = scribd_candidates[0]
-        if status_id:
-            tg_req("editMessageText", {
-                "chat_id": chat_id,
-                "message_id": status_id,
-                "text": f"📖 <b>Dokumen Ditemukan di Scribd!</b>\n"
-                        f"──────────────────────────\n"
-                        f"📚 <b>Judul:</b> {best_doc['title']}\n"
-                        f"⚡ <b>Mengunduh otomatis via Engine Scribd HD...</b>",
-                "parse_mode": "HTML",
-                "reply_markup": back_keyboard()
-            })
-        threading.Thread(target=run_download, args=(chat_id, best_doc['url'], status_id), daemon=True).start()
-        return
+        # Coba download kandidat terbaik (dengan fallback ke kandidat berikutnya jika di-takedown)
+        for doc in scribd_candidates:
+            if status_id:
+                tg_req("editMessageText", {
+                    "chat_id": chat_id,
+                    "message_id": status_id,
+                    "text": f"📖 <b>Dokumen Ditemukan di Scribd!</b>\n"
+                            f"──────────────────────────\n"
+                            f"📚 <b>Judul:</b> {doc['title']}\n"
+                            f"⚡ <b>Mengunduh otomatis via Engine Scribd HD...</b>",
+                    "parse_mode": "HTML",
+                    "reply_markup": back_keyboard()
+                })
+            
+            # Cek apakah download sukses
+            res_pdf, err = download_scribd_pdf(doc['url'], chat_id=chat_id, status_msg_id=status_id)
+            if res_pdf and os.path.exists(res_pdf) and os.path.getsize(res_pdf) > 100000:
+                # Sukses unduh novel asli!
+                sz_mb = round(os.path.getsize(res_pdf) / 1048576, 1)
+                caption = (
+                    f"✅ <b>E-Book Berhasil Diunduh!</b>\n\n"
+                    f"📖 <b>Judul:</b> {doc['title']}\n"
+                    f"✍️ <b>Penulis:</b> {book_author or 'Tere Liye'}\n"
+                    f"📁 <b>Ukuran:</b> <code>{sz_mb} MB</code> (1 File Utuh)\n"
+                    f"✨ <i>Kualitas HD Retina & Bebas Watermark</i>"
+                )
+                r = send_pdf(chat_id, res_pdf, caption=caption, reply_markup=after_download_keyboard())
+                if r and r.get("ok"):
+                    doc_obj = r.get("result", {}).get("document", {})
+                    file_id = doc_obj.get("file_id")
+                    if file_id:
+                        save_history(chat_id, doc['title'], sz_mb, file_id)
+                    if status_id:
+                        tg_req("deleteMessage", {"chat_id": chat_id, "message_id": status_id})
+                try: os.remove(res_pdf)
+                except Exception: pass
+                return
 
     # 5. Jika kedua sumber tidak menemukan dokumen
     msg_not_found = (
