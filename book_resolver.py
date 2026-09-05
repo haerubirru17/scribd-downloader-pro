@@ -4,7 +4,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 
 def get_google_book_info(url_or_id):
-    """Ambil informasi metadata lengkap (judul, penulis, cover) dari Play Books / Google Books."""
+    """Ambil informasi metadata lengkap (judul, penulis) dari Play Books / Google Books."""
     text = url_or_id.strip()
     meta = {"title": "", "author": "", "raw_query": text, "is_link": False}
     
@@ -50,6 +50,59 @@ def clean_query(raw_input):
     """Ekstrak judul bersih dari URL Google Play Books atau teks pencarian."""
     info = get_google_book_info(raw_input)
     return info.get("title") or raw_input.strip()
+
+
+def search_scribd_book(title, author=""):
+    """Cari dokumen novel/buku asli di Scribd dengan intelligent scoring & filtering."""
+    query = f"{title} {author}".strip()
+    search_q = f"site:scribd.com/document {query}"
+    
+    url = "https://lite.duckduckgo.com/lite/"
+    data = urllib.parse.urlencode({"q": search_q}).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Content-Type": "application/x-www-form-urlencoded"
+    })
+
+    BLACKLIST_KEYWORDS = {"makalah", "jurnal", "skripsi", "tugas", "resensi", "sinopsis", "rpp", "silabus", "soal", "bab-1"}
+    title_words = set(re.findall(r'\w+', title.lower()))
+    author_words = set(re.findall(r'\w+', author.lower())) if author else set()
+
+    candidates = []
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+            links = list(dict.fromkeys(re.findall(r'href=["\'](https?://(?:[a-zA-Z0-9_-]+\.)?scribd\.com/document/\d+/[^"\']+)["\']', html)))
+            
+            for link in links:
+                slug = link.split("/")[-1].lower()
+                slug_words = set(re.findall(r'\w+', slug))
+                
+                # Filter negatif (buang makalah, tugas, sinopsis)
+                if slug_words & BLACKLIST_KEYWORDS:
+                    continue
+                
+                # Hitung skor kecocokan kata kunci
+                match_title = len(slug_words & title_words)
+                match_author = len(slug_words & author_words) if author_words else 0
+                
+                score = (match_title * 3) + (match_author * 2)
+                
+                # Format judul dari slug
+                display_name = re.sub(r'[-_]', ' ', link.split('/')[-1])
+                display_name = re.sub(r'\s*SFILE\s*mobi.*', '', display_name, flags=re.IGNORECASE)
+                
+                if match_title >= 1:
+                    candidates.append({
+                        "title": display_name.strip(),
+                        "url": link,
+                        "score": score
+                    })
+    except Exception as e:
+        print(f"Error searching Scribd fallback: {e}")
+
+    candidates.sort(key=lambda x: -x["score"])
+    return candidates[:3]
 
 
 def search_books(query, limit=5):
@@ -175,15 +228,3 @@ def download_book_stream(download_url, output_path, progress_cb=None):
                     progress_cb(downloaded, total_bytes, pct, time.time() - t0)
 
     return os.path.exists(output_path) and os.path.getsize(output_path) > 0
-
-
-if __name__ == "__main__":
-    # Self-test unit
-    print("Testing Book Resolver...")
-    res = search_books("Filosofi Teras", limit=2)
-    print(f"Found {len(res)} results:")
-    for b in res:
-        print(f"• [{b['format']}] {b['title']} - {b['creator']} ({b['size_mb']} MB)")
-        print(f"  URL: {b['download_url'][:80]}...")
-    assert len(res) > 0, "No results returned"
-    print("ALL TESTS PASSED.")

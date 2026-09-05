@@ -301,7 +301,7 @@ BOOK_SEARCH_CACHE = {}
 
 
 def handle_book_search(chat_id, raw_input):
-    """Cari e-book gratis dengan flow informatif & fallback error yang jelas."""
+    """Cari e-book gratis dengan flow informatif & auto-fallback cerdas ke Scribd."""
     # 1. Ekstrak metadata info dari link atau query
     meta = book_res.get_google_book_info(raw_input)
     book_title = meta.get("title") or raw_input.strip()
@@ -313,39 +313,66 @@ def handle_book_search(chat_id, raw_input):
         f"📖 <b>Informasi Buku Terdeteksi:</b>\n"
         f"──────────────────────────\n"
         f"📚 <b>Judul:</b> {book_title}{author_str}\n\n"
-        f"⏳ <i>Menelusuri database arsip buku terbuka...</i>",
+        f"⏳ <i>[1/2] Menelusuri database arsip terbuka (PDF/EPUB)...</i>",
         reply_markup=back_keyboard()
     )
     status_id = (status_msg or {}).get("result", {}).get("message_id")
 
-    # 2. Cari di database arsip
+    # 2. Cek database arsip terbuka (Archive.org)
     results = book_res.search_books(book_title, limit=5)
     
-    # 3. Handling Jika E-Book Belum Tersedia di Arsip Terbuka
+    # 3. Jika Tidak Ada di Arsip Terbuka -> OTOMATIS FALLBACK KE SCRIBD ENGINE
     if not results:
+        if status_id:
+            tg_req("editMessageText", {
+                "chat_id": chat_id,
+                "message_id": status_id,
+                "text": f"📖 <b>Informasi Buku Terdeteksi:</b>\n"
+                        f"──────────────────────────\n"
+                        f"📚 <b>Judul:</b> {book_title}{author_str}\n\n"
+                        f"🔄 <i>Arsip open access belum tersedia.</i>\n"
+                        f"⚡ <b>[2/2] Mengalihkan pencarian otomatis ke Scribd Mirror...</b>",
+                "parse_mode": "HTML",
+                "reply_markup": back_keyboard()
+            })
+        
+        # Cari dokumen novel asli di Scribd
+        scribd_candidates = book_res.search_scribd_book(book_title, book_author)
+        
+        if scribd_candidates:
+            best_doc = scribd_candidates[0]
+            if status_id:
+                tg_req("editMessageText", {
+                    "chat_id": chat_id,
+                    "message_id": status_id,
+                    "text": f"📖 <b>Dokumen Ditemukan di Scribd!</b>\n"
+                            f"──────────────────────────\n"
+                            f"📚 <b>Judul:</b> {best_doc['title']}\n"
+                            f"⚡ <b>Mengunduh otomatis via Engine Scribd HD...</b>",
+                    "parse_mode": "HTML",
+                    "reply_markup": back_keyboard()
+                })
+            # Langsung download otomatis via engine Scribd
+            threading.Thread(target=run_download, args=(chat_id, best_doc['url'], status_id), daemon=True).start()
+            return
+        
+        # Jika di Scribd juga tidak ada
         msg_not_found = (
-            f"❌ <b>E-Book Belum Tersedia di Arsip Terbuka</b>\n"
+            f"❌ <b>Dokumen Belum Tersedia</b>\n"
             f"──────────────────────────\n"
             f"📖 <b>Judul:</b> {book_title}{author_str}\n\n"
             f"ℹ️ <b>Penyebab:</b>\n"
-            f"Buku ini masih terproteksi DRM penerbit dan belum diunggah ke arsip publik (Open Access).\n\n"
-            f"💡 <b>Solusi:</b>\n"
-            f"• Coba unduh via link <b>Scribd</b> jika dokumen tersedia di sana.\n"
-            f"• Atau cari dengan judul buku populer lainnya."
+            f"Buku ini belum tersedia di arsip publik maupun Scribd.\n\n"
+            f"💡 <b>Tips:</b>\n"
+            f"Coba cari dengan kata kunci judul lain atau nama penulis."
         )
-        not_found_keyboard = {
-            "inline_keyboard": [
-                [{"text": "📄 Panduan Mode Scribd", "callback_data": "btn_mode_scribd"}],
-                [{"text": "🔙 Kembali ke Menu Utama", "callback_data": "btn_start"}]
-            ]
-        }
         if status_id:
-            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": msg_not_found, "parse_mode": "HTML", "reply_markup": not_found_keyboard})
+            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": msg_not_found, "parse_mode": "HTML", "reply_markup": back_keyboard()})
         else:
-            send_msg(chat_id, msg_not_found, reply_markup=not_found_keyboard)
+            send_msg(chat_id, msg_not_found, reply_markup=back_keyboard())
         return
 
-    # 4. Tampilkan Pilihan Download jika Berhasil Ditemukan
+    # 4. Tampilkan Pilihan Download jika Berhasil Ditemukan di Arsip Terbuka
     buttons = []
     text_lines = [
         f"📚 <b>E-Book Ditemukan & Siap Unduh!</b>\n"
