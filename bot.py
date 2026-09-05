@@ -353,45 +353,31 @@ def handle_book_search(chat_id, raw_input):
             send_msg(chat_id, card_text, reply_markup={"inline_keyboard": buttons})
         return
 
-    # 4. Prioritas 2: Jika tidak ada di Archive tapi ada di Scribd -> Coba kandidat Scribd yang valid
+    # 4. Prioritas 2: Jika tidak ada di Archive tapi ada di Scribd -> Tampilkan Kartu Pilihan Dokumen Scribd
     if scribd_candidates:
-        # Coba download kandidat terbaik (dengan fallback ke kandidat berikutnya jika di-takedown)
-        for doc in scribd_candidates:
-            if status_id:
-                tg_req("editMessageText", {
-                    "chat_id": chat_id,
-                    "message_id": status_id,
-                    "text": f"📖 <b>Dokumen Ditemukan di Scribd!</b>\n"
-                            f"──────────────────────────\n"
-                            f"📚 <b>Judul:</b> {doc['title']}\n"
-                            f"⚡ <b>Mengunduh otomatis via Engine Scribd HD...</b>",
-                    "parse_mode": "HTML",
-                    "reply_markup": back_keyboard()
-                })
+        buttons = []
+        text_lines = [
+            f"📚 <b>Dokumen Ditemukan di Scribd!</b>\n"
+            f"──────────────────────────\n"
+            f"📖 <b>Target:</b> {book_title}{author_str}\n\n"
+            f"<i>Pilih dokumen Scribd yang ingin diunduh di bawah:</i>\n"
+        ]
+        for i, doc in enumerate(scribd_candidates):
+            cache_key = f"{chat_id}_scribd_{i}"
+            BOOK_SEARCH_CACHE[cache_key] = doc
+            text_lines.append(f"<b>{i+1}. {doc['title'][:40]}</b>")
             
-            # Cek apakah download sukses
-            res_pdf, err = download_scribd_pdf(doc['url'], chat_id=chat_id, status_msg_id=status_id)
-            if res_pdf and os.path.exists(res_pdf) and os.path.getsize(res_pdf) > 100000:
-                # Sukses unduh novel asli!
-                sz_mb = round(os.path.getsize(res_pdf) / 1048576, 1)
-                caption = (
-                    f"✅ <b>E-Book Berhasil Diunduh!</b>\n\n"
-                    f"📖 <b>Judul:</b> {doc['title']}\n"
-                    f"✍️ <b>Penulis:</b> {book_author or 'Tere Liye'}\n"
-                    f"📁 <b>Ukuran:</b> <code>{sz_mb} MB</code> (1 File Utuh)\n"
-                    f"✨ <i>Kualitas HD Retina & Bebas Watermark</i>"
-                )
-                r = send_pdf(chat_id, res_pdf, caption=caption, reply_markup=after_download_keyboard())
-                if r and r.get("ok"):
-                    doc_obj = r.get("result", {}).get("document", {})
-                    file_id = doc_obj.get("file_id")
-                    if file_id:
-                        save_history(chat_id, doc['title'], sz_mb, file_id)
-                    if status_id:
-                        tg_req("deleteMessage", {"chat_id": chat_id, "message_id": status_id})
-                try: os.remove(res_pdf)
-                except Exception: pass
-                return
+            btn_label = f"📥 Unduh Pilihan {i+1}"
+            buttons.append([{"text": btn_label, "callback_data": f"dl_scbook_{i}"}])
+
+        buttons.append([{"text": "🔙 Kembali ke Menu Utama", "callback_data": "btn_start"}])
+
+        card_text = "\n".join(text_lines)
+        if status_id:
+            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": card_text, "parse_mode": "HTML", "reply_markup": {"inline_keyboard": buttons}})
+        else:
+            send_msg(chat_id, card_text, reply_markup={"inline_keyboard": buttons})
+        return
 
     # 5. Jika kedua sumber tidak menemukan dokumen
     msg_not_found = (
@@ -813,6 +799,26 @@ def poll():
                                      "📂 <b>Direktori Riwayat Unduhan:</b>\n"
                                      "<i>Klik dokumen di bawah untuk mengunduh ulang secara instan:</i>",
                                      reply_markup=history_keyboard(cb_chat_id))
+                    elif cb_data.startswith("dl_scbook_"):
+                        try:
+                            idx = int(cb_data.replace("dl_scbook_", ""))
+                            cache_key = f"{cb_chat_id}_scribd_{idx}"
+                            doc_item = BOOK_SEARCH_CACHE.get(cache_key)
+                            if doc_item:
+                                status_msg = send_msg(
+                                    cb_chat_id,
+                                    f"⚡ <b>Memproses Dokumen Scribd...</b>\n"
+                                    f"──────────────────────────\n"
+                                    f"📖 <b>{doc_item['title']}</b>\n"
+                                    f"🌐 Menghubungkan ke proxy & membuka sesi HD...",
+                                    reply_markup=back_keyboard()
+                                )
+                                s_id = (status_msg or {}).get("result", {}).get("message_id")
+                                threading.Thread(target=run_download, args=(cb_chat_id, doc_item["url"], s_id), daemon=True).start()
+                            else:
+                                send_msg(cb_chat_id, "❌ Sesi telah kedaluwarsa. Silakan cari ulang bukunya.", reply_markup=main_keyboard(cb_chat_id))
+                        except Exception as e:
+                            print(f"Error triggering scribd book download: {e}")
                     elif cb_data.startswith("dl_book_"):
                         try:
                             idx = int(cb_data.replace("dl_book_", ""))
