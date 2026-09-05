@@ -3,6 +3,19 @@ import re, json, urllib.request, urllib.parse, os, time
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 
+def sanitize_book_title(title):
+    """Bersihkan tag pengganggu seperti (unedited version), (novel), [pdf], dll."""
+    t = title
+    # Hapus tag dalam kurung bulat / kurung siku
+    t = re.sub(r'\(.*?(?:unedited|version|edisi|novel|cover|bahasa|indonesia|cetakan).*?\)', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\[.*?(?:unedited|version|edisi|novel|cover|bahasa|indonesia|pdf|epub).*?\]', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s*-\s*Buku di Google Play.*', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s*-\s*Books on Google Play.*', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s*oleh\s+.*', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s*by\s+.*', '', t, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', t).strip()
+
+
 def get_google_book_info(url_or_id):
     """Ambil informasi metadata lengkap (judul, penulis) dari Play Books / Google Books."""
     text = url_or_id.strip()
@@ -20,28 +33,21 @@ def get_google_book_info(url_or_id):
                 og_match = re.search(r'<meta property=["\']og:title["\'] content=["\']([^"\']+)["\']', html)
                 if og_match:
                     raw_title = og_match.group(1)
-                    # Ekstrak nama penulis jika ada di og:title ("oleh X")
                     m_author = re.search(r'oleh\s+([^-]+)', raw_title, flags=re.IGNORECASE)
                     if m_author:
-                        meta["author"] = m_author.group(1).strip()
+                        meta["author"] = sanitize_book_title(m_author.group(1))
                     
-                    # Bersihkan judul
-                    clean_t = re.sub(r'\s*-\s*Buku di Google Play.*', '', raw_title, flags=re.IGNORECASE)
-                    clean_t = re.sub(r'\s*-\s*Books on Google Play.*', '', clean_t, flags=re.IGNORECASE)
-                    clean_t = re.sub(r'\s*oleh\s+.*', '', clean_t, flags=re.IGNORECASE)
-                    clean_t = re.sub(r'\s*by\s+.*', '', clean_t, flags=re.IGNORECASE)
-                    meta["title"] = clean_t.strip()
+                    meta["title"] = sanitize_book_title(raw_title)
         except Exception:
             pass
 
     if not meta["title"]:
-        # Fallback jika input adalah query biasa
         cleaned = text
         for prefix in ("/buku ", "buku ", "/cari ", "cari "):
             if cleaned.lower().startswith(prefix):
                 cleaned = cleaned[len(prefix):].strip()
                 break
-        meta["title"] = cleaned
+        meta["title"] = sanitize_book_title(cleaned)
 
     return meta
 
