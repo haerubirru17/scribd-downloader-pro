@@ -437,10 +437,10 @@ def handle_book_download(chat_id, idx):
                 "parse_mode": "HTML"
             })
 
+        creator_str = f"\n✍️ <b>Penulis:</b> {book_info['creator']}" if book_info.get("creator") else ""
         caption_text = (
             f"✅ <b>E-Book Berhasil Diunduh!</b>\n\n"
-            f"📖 <b>Judul:</b> {title}\n"
-            f"✍️ <b>Penulis:</b> {book_info['creator']}\n"
+            f"📖 <b>Judul:</b> {title}{creator_str}\n"
             f"📁 <b>Ukuran:</b> <code>{sz_mb} MB</code> ({fmt.upper()})\n"
             f"✨ <i>Buku lengkap & bebas watermark</i>"
         )

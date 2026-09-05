@@ -219,9 +219,20 @@ def search_books(query, author="", limit=5):
                                     size_mb = round(fsize / 1048576, 1)
                                     
                                     title_display = doc_title or fname.replace(f".{ext}", "")
-                                    creator = doc.get("creator") or meta.get("metadata", {}).get("creator", author or "Open Access")
+                                
+                                    # Sanitasi nama penulis: buang 'Open Access' / None
+                                    raw_creator = doc.get("creator") or meta.get("metadata", {}).get("creator")
+                                    if raw_creator and str(raw_creator).lower() not in ("none", "null", "unknown", "open access", "-"):
+                                        creator = str(raw_creator).strip()
+                                    elif author:
+                                        creator = author.strip()
+                                    else:
+                                        creator = ""
+                                
                                     year = doc.get("year") or meta.get("metadata", {}).get("year", "-")
-                                    
+                                    if str(year).lower() in ("none", "null", "-"):
+                                        year = ""
+                                
                                     results.append({
                                         "title": title_display,
                                         "creator": creator,
