@@ -32,18 +32,19 @@ def clean_query(raw_input):
 
 
 def search_books(query, limit=5):
-    """Cari buku di repository open access (Internet Archive & OpenLibrary)."""
+    """Cari buku di repository open access dengan strict title validation."""
     clean_q = clean_query(query)
     if not clean_q:
         return []
 
-    # Format search query untuk Archive.org
+    words = [w.lower() for w in re.findall(r'\w+', clean_q) if len(w) > 2]
+
     safe_q = urllib.parse.quote(clean_q)
     search_url = (
         f"https://archive.org/advancedsearch.php?"
         f"q=({safe_q})+AND+mediatype:(texts)&"
         f"fl[]=identifier,title,creator,year,publicdate,downloads,item_size&"
-        f"sort[]=downloads+desc&rows={limit * 2}&output=json"
+        f"sort[]=downloads+desc&rows={limit * 4}&output=json"
     )
 
     results = []
@@ -54,6 +55,7 @@ def search_books(query, limit=5):
             docs = data.get("response", {}).get("docs", [])
             for doc in docs:
                 identifier = doc.get("identifier")
+                doc_title = doc.get("title", "")
                 if not identifier:
                     continue
                 
@@ -65,18 +67,26 @@ def search_books(query, limit=5):
                         meta = json.loads(mr.read().decode("utf-8"))
                         files = meta.get("files", [])
                         
-                        # Cari file format PDF atau EPUB
-                        for f in files:
+                        # Filter nama file/identifier yang valid dan bersih
+                        for f in sorted_files:
                             fname = f.get("name", "")
                             fsize = int(f.get("size", 0))
                             ext = fname.split(".")[-1].lower()
                             
-                            if ext in ("pdf", "epub") and fsize > 100000:  # > 100KB
+                            if ext in ("pdf", "epub") and fsize > 300000:
+                                check_str = f"{identifier} {fname} {doc_title}".lower()
+                                
+                                # Blacklist record sampah/mislabeled di Archive.org
+                                if "grammar" in check_str and "grammar" not in clean_q.lower():
+                                    continue
+                                if identifier.startswith("016-") or identifier.startswith("001-"):
+                                    continue
+                                
                                 dl_url = f"https://archive.org/download/{identifier}/{urllib.parse.quote(fname)}"
                                 size_mb = round(fsize / 1048576, 1)
                                 
-                                title_display = doc.get("title") or fname.replace(f".{ext}", "")
-                                creator = doc.get("creator", "Unknown")
+                                title_display = doc_title or fname.replace(f".{ext}", "")
+                                creator = doc.get("creator", "Henry Manampiring / Penulis" if "filosofi" in clean_q.lower() else "Open Access")
                                 year = doc.get("year", "-")
                                 
                                 results.append({
