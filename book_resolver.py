@@ -4,59 +4,70 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 
 def clean_query(raw_input):
-    """Ekstrak judul / kata kunci dari URL atau teks biasa."""
+    """Ekstrak judul bersih dari URL Google Play Books atau teks pencarian."""
     text = raw_input.strip()
-    # Jika berupa URL Google Play Store / Google Books
     if "play.google.com" in text or "books.google" in text:
-        # Coba ambil parameter id atau path judul
-        m_id = re.search(r"[?&]id=([a-zA-Z0-9_-]+)", text)
-        if m_id:
-            # Ambil metadata via Google Books API
-            try:
-                api_url = f"https://www.googleapis.com/books/v1/volumes/{m_id.group(1)}"
-                req = urllib.request.Request(api_url, headers=HEADERS)
-                with urllib.request.urlopen(req, timeout=6) as r:
-                    d = json.loads(r.read())
-                    info = d.get("volumeInfo", {})
-                    title = info.get("title", "")
-                    authors = " ".join(info.get("authors", []))
-                    if title:
-                        return f"{title} {authors}".strip()
-            except Exception:
-                pass
-        # Fallback ambil dari slug URL
-        slug = text.split("/")[-1].split("?")[0]
-        slug = re.sub(r"[-_]", " ", slug)
-        return slug
+        try:
+            req = urllib.request.Request(text, headers={
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+                "Accept-Language": "id-ID,id;q=0.9,en;q=0.8"
+            })
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+                og_match = re.search(r'<meta property=["\']og:title["\'] content=["\']([^"\']+)["\']', html)
+                if og_match:
+                    raw_title = og_match.group(1)
+                    # Bersihkan suffix Google Play
+                    clean_t = re.sub(r'\s*-\s*Buku di Google Play.*', '', raw_title, flags=re.IGNORECASE)
+                    clean_t = re.sub(r'\s*-\s*Books on Google Play.*', '', clean_t, flags=re.IGNORECASE)
+                    clean_t = re.sub(r'\s*oleh\s+.*', '', clean_t, flags=re.IGNORECASE)
+                    clean_t = re.sub(r'\s*by\s+.*', '', clean_t, flags=re.IGNORECASE)
+                    if clean_t.strip():
+                        return clean_t.strip()
+        except Exception:
+            pass
+
+    # Bersihkan prefix perintah
+    for prefix in ("/buku ", "buku ", "/cari ", "cari "):
+        if text.lower().startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+            
     return text
 
 
 def search_books(query, limit=5):
-    """Cari buku di repository open access dengan strict title validation."""
+    """Cari buku di repository open access dengan fuzzy & strict matching."""
     clean_q = clean_query(query)
     if not clean_q:
         return []
 
-    words = [w.lower() for w in re.findall(r'\w+', clean_q) if len(w) > 2]
+    # Bersihkan karakter spesial untuk pencarian Archive.org
+    safe_terms = " ".join(re.findall(r'[a-zA-Z0-9]+', clean_q))
+    if not safe_terms:
+        safe_terms = clean_q
 
-    safe_q = urllib.parse.quote(clean_q)
+    safe_q = urllib.parse.quote(safe_terms)
     search_url = (
         f"https://archive.org/advancedsearch.php?"
         f"q=({safe_q})+AND+mediatype:(texts)&"
         f"fl[]=identifier,title,creator,year,publicdate,downloads,item_size&"
-        f"sort[]=downloads+desc&rows={limit * 4}&output=json"
+        f"sort[]=downloads+desc&rows={limit * 5}&output=json"
     )
 
     results = []
+    seen_identifiers = set()
+
     try:
         req = urllib.request.Request(search_url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             docs = data.get("response", {}).get("docs", [])
+            
             for doc in docs:
                 identifier = doc.get("identifier")
                 doc_title = doc.get("title", "")
-                if not identifier:
+                if not identifier or identifier in seen_identifiers:
                     continue
                 
                 # Fetch metadata files
@@ -67,27 +78,36 @@ def search_books(query, limit=5):
                         meta = json.loads(mr.read().decode("utf-8"))
                         files = meta.get("files", [])
                         
-                        # Filter nama file/identifier yang valid dan bersih
+                        # Prioritaskan PDF, lalu EPUB
+                        sorted_files = sorted(
+                            files,
+                            key=lambda x: (
+                                0 if x.get("name", "").lower().endswith(".pdf") else (
+                                1 if x.get("name", "").lower().endswith(".epub") else 2)
+                            )
+                        )
+
                         for f in sorted_files:
                             fname = f.get("name", "")
                             fsize = int(f.get("size", 0))
                             ext = fname.split(".")[-1].lower()
                             
-                            if ext in ("pdf", "epub") and fsize > 300000:
+                            # Filter hanya file buku valid
+                            if ext in ("pdf", "epub") and fsize > 150000:  # > 150KB
                                 check_str = f"{identifier} {fname} {doc_title}".lower()
                                 
-                                # Blacklist record sampah/mislabeled di Archive.org
+                                # Filter entri sampah/mislabeled jika mencari buku non-grammar
                                 if "grammar" in check_str and "grammar" not in clean_q.lower():
                                     continue
-                                if identifier.startswith("016-") or identifier.startswith("001-"):
+                                if identifier.startswith("016-") and "grammar" in check_str:
                                     continue
                                 
                                 dl_url = f"https://archive.org/download/{identifier}/{urllib.parse.quote(fname)}"
                                 size_mb = round(fsize / 1048576, 1)
                                 
                                 title_display = doc_title or fname.replace(f".{ext}", "")
-                                creator = doc.get("creator", "Henry Manampiring / Penulis" if "filosofi" in clean_q.lower() else "Open Access")
-                                year = doc.get("year", "-")
+                                creator = doc.get("creator") or meta.get("metadata", {}).get("creator", "Penulis / Open Access")
+                                year = doc.get("year") or meta.get("metadata", {}).get("year", "-")
                                 
                                 results.append({
                                     "title": title_display,
@@ -98,6 +118,7 @@ def search_books(query, limit=5):
                                     "download_url": dl_url,
                                     "filename": fname
                                 })
+                                seen_identifiers.add(identifier)
                                 break
                 except Exception:
                     continue
