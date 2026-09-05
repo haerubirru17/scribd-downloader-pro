@@ -42,7 +42,7 @@ DEFAULT_PAGE_LOAD_TIMEOUT_SECONDS = max(
 )
 DEFAULT_EXPORT_BATCH_SIZE = max(
     1,
-    int(os.getenv("SCRIBD_EXPORT_BATCH_SIZE", "8")),
+    int(os.getenv("SCRIBD_EXPORT_BATCH_SIZE", "20")),
 )
 PDF_STREAM_CHUNK_SIZE = int(os.getenv("SCRIBD_PDF_STREAM_CHUNK_SIZE", str(1024 * 1024)))
 # Hook progres: fn(done_pages, total_pages) — dipasang bot.py, core tetap standalone
@@ -1093,15 +1093,17 @@ def save_pdf_pages_individually(
                 master_h,
             )
 
-            # Tunggu rendering font & layout selesai (mencegah black box font glitch)
+            # Zero-Degradation Image & Font Barrier
             driver.execute_async_script(
                 """
                 const done = arguments[arguments.length - 1];
-                if (document.fonts && document.fonts.ready) {
-                    document.fonts.ready.then(() => setTimeout(done, 50)).catch(() => done());
-                } else {
-                    setTimeout(done, 50);
-                }
+                const p1 = (document.fonts && document.fonts.ready) ? document.fonts.ready : Promise.resolve();
+                
+                // Decode seluruh gambar dan diagram di dalam page ke GPU buffer sebelum cetak
+                const imgs = Array.from(document.querySelectorAll('.outer_page img'));
+                const p2 = Promise.all(imgs.map(img => img.decode ? img.decode().catch(() => null) : Promise.resolve()));
+                
+                Promise.all([p1, p2]).then(() => setTimeout(done, 60)).catch(() => done());
                 """
             )
 

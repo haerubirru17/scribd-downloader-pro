@@ -175,19 +175,36 @@ def pool_age_hours():
 
 # ==================== DOWNLOAD (dengan rotasi proxy) ====================
 
+def send_action(chat_id, action="upload_document"):
+    """Kirim animasi live action Telegram (typing, upload_document, dll)."""
+    return tg_req("sendChatAction", {"chat_id": chat_id, "action": action})
+
+
 def try_download(converted_url, filename, proxy):
     """Satu percobaan download lewat Chrome+proxy. Return (path, None) atau (None, alasan)."""
-    out_dir = tempfile.mkdtemp(prefix="scribd-out-")
+    # Gunakan RAM disk /dev/shm jika tersedia untuk I/O instan
+    spool_root = "/dev/shm" if os.path.exists("/dev/shm") and os.access("/dev/shm", os.W_OK) else None
+    out_dir = tempfile.mkdtemp(prefix="scribd-out-", dir=spool_root)
     out_path = os.path.join(out_dir, filename)
-    with tempfile.TemporaryDirectory(prefix="scribd-prof-") as profile_dir:
+    with tempfile.TemporaryDirectory(prefix="scribd-prof-", dir=spool_root) as profile_dir:
         driver = None
         try:
             options = scribd.build_chrome_options(profile_dir)
             options.add_argument(f"--proxy-server=http://{proxy}")
             driver = scribd.webdriver.Chrome(options=options)
-            driver.set_page_load_timeout(120)
+            
+            # CDP Speed Boost: Blokir tracker, telemetry & script sampah pihak ketiga
+            try:
+                driver.execute_cdp_cmd("Network.enable", {})
+                driver.execute_cdp_cmd("Network.setBlockedURLs", {
+                    "urls": ["*analytics*", "*doubleclick*", "*facebook*", "*datadog*", "*sentry*", "*.gif", "*track*"]
+                })
+            except Exception:
+                pass
+
+            driver.set_page_load_timeout(90)
             driver.get(converted_url)
-            time.sleep(2)
+            time.sleep(1.5)
 
             scribd.hide_cookie_dialogs(driver)
             total_pages = driver.execute_script("return document.querySelectorAll('.outer_page').length;")
@@ -606,11 +623,19 @@ def poll():
                              reply_markup=main_keyboard(chat_id))
                     continue
 
-                # Instant Response (<0.5 detik): Beri tahu user link sudah ditangkap & sedang diproses
-                init_msg = send_msg(chat_id, "🔍 <b>Link Terdeteksi!</b>\nMenyiapkan sesi & menghubungkan ke proxy tercepat...")
+                # Instant Feedback (<0.2s): Kirim aksi "typing/upload" di header Telegram + status card seketika
+                send_action(chat_id, "typing")
+                init_msg = send_msg(
+                    chat_id,
+                    "⚡ <b>Memproses Dokumen...</b>\n"
+                    "──────────────────────────\n"
+                    "🔗 Link Scribd terdeteksi\n"
+                    "🌐 Memilih proxy tercepat & membuka sesi...",
+                    reply_markup=back_keyboard()
+                )
                 init_msg_id = (init_msg or {}).get("result", {}).get("message_id")
 
-                # Background download
+                # Jalankan download di background thread
                 threading.Thread(target=run_download, args=(chat_id, urls[0], init_msg_id), daemon=True).start()
 
         except Exception as e:
