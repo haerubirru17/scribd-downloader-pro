@@ -53,7 +53,7 @@ def clean_query(raw_input):
 
 
 def search_scribd_book(title, author=""):
-    """Cari dokumen novel/buku asli di Scribd dengan intelligent scoring & filtering."""
+    """Cari dokumen novel/buku asli di Scribd lengkap dengan cuplikan isi (snippet preview)."""
     query = f"{title} {author}".strip()
     search_q = f"site:scribd.com/document {query}"
     
@@ -75,9 +75,10 @@ def search_scribd_book(title, author=""):
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
-            links = list(dict.fromkeys(re.findall(r'href=["\'](https?://(?:[a-zA-Z0-9_-]+\.)?scribd\.com/document/\d+/[^"\']+)["\']', html)))
+            links = re.findall(r'href=["\'](https?://(?:[a-zA-Z0-9_-]+\.)?scribd\.com/document/\d+/[^"\']+)["\']', html)
+            snippets = re.findall(r'<td class=[\'"]result-snippet[\'"]>(.*?)</td>', html, re.DOTALL)
             
-            for link in links:
+            for link, raw_snip in zip(links, snippets):
                 slug = link.split("/")[-1].lower()
                 slug_words = set(re.findall(r'\w+', slug))
                 
@@ -91,6 +92,13 @@ def search_scribd_book(title, author=""):
                 
                 score = (match_title * 3) + (match_author * 2)
                 
+                # Bersihkan snippet preview
+                clean_snip = re.sub(r'<[^>]+>', '', raw_snip).strip()
+                clean_snip = re.sub(r'Free download as PDF File.*', '', clean_snip, flags=re.IGNORECASE).strip()
+                clean_snip = re.sub(r'or read online for free.*', '', clean_snip, flags=re.IGNORECASE).strip()
+                if not clean_snip or len(clean_snip) < 10:
+                    clean_snip = "Dokumen naskah / e-book lengkap di Scribd."
+
                 # Format judul dari slug
                 display_name = re.sub(r'[-_]', ' ', link.split('/')[-1])
                 display_name = re.sub(r'\s*SFILE\s*mobi.*', '', display_name, flags=re.IGNORECASE)
@@ -99,6 +107,7 @@ def search_scribd_book(title, author=""):
                     candidates.append({
                         "title": display_name.strip(),
                         "url": link,
+                        "snippet": clean_snip[:110] + "..." if len(clean_snip) > 110 else clean_snip,
                         "score": score
                     })
     except Exception as e:

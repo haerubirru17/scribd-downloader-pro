@@ -360,12 +360,13 @@ def handle_book_search(chat_id, raw_input):
             f"📚 <b>Dokumen Ditemukan di Scribd!</b>\n"
             f"──────────────────────────\n"
             f"📖 <b>Target:</b> {book_title}{author_str}\n\n"
-            f"<i>Pilih dokumen Scribd yang ingin diunduh di bawah:</i>\n"
+            f"<i>Pilih dokumen yang sesuai berdasarkan cuplikan isi:</i>\n"
         ]
         for i, doc in enumerate(scribd_candidates):
             cache_key = f"{chat_id}_scribd_{i}"
             BOOK_SEARCH_CACHE[cache_key] = doc
             text_lines.append(f"<b>{i+1}. {doc['title'][:40]}</b>")
+            text_lines.append(f"   💬 <i>\"{doc.get('snippet', '')}\"</i>\n")
             
             btn_label = f"📥 Unduh Pilihan {i+1}"
             buttons.append([{"text": btn_label, "callback_data": f"dl_scbook_{i}"}])
