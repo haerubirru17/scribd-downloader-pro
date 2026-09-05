@@ -24,15 +24,17 @@ def gather_proxies():
 
 
 def test_proxy(proxy, target="scribd"):
-    """Test proxy response time against Scribd embed WAF."""
+    """Test proxy response time against Scribd embed WAF (verifikasi body asli Scribd)."""
     h = urllib.request.build_opener(urllib.request.ProxyHandler(
         {"http": f"http://{proxy}", "https": f"http://{proxy}"}))
     h.addheaders = [("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0")]
     t = time.time()
     try:
         r = h.open(SCRIBD_TARGET_URL, timeout=8)
-        if r.status == 200:
-            return round(time.time() - t, 1)
+        body = r.read(1500)
+        # Validasi konten asli Scribd (bukan halaman block/iklan proxy)
+        if r.status == 200 and (b"scribd" in body.lower() or b"outer_page" in body or b"docmanager" in body.lower()):
+            return max(0.1, round(time.time() - t, 1))
     except Exception:
         pass
     return None

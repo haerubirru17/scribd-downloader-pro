@@ -11,7 +11,7 @@ API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 POOL_FILE = "/home/ubuntu/proxy-hunter/data/latest.json"
 DATA_DIR = "/home/ubuntu/proxy-hunter/data"
-MAX_TRIES = 4          # ponytail: 4 proxy per dokumen — cukup utk WAF rotasi, naikkan kalau sering gagal semua
+MAX_TRIES = 8          # ponytail: toleransi 8 proxy per dokumen (rotasi otomatis jika ada proxy yang mendadak putus)
 
 HUNT_LOCK = threading.Lock()   # ponytail: satu garap pada satu waktu
 HUNTING = set()                # chat_id yang sedang /cari
