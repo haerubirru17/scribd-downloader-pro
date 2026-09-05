@@ -300,43 +300,66 @@ def ebook_guide_text():
 BOOK_SEARCH_CACHE = {}
 
 
-def handle_book_search(chat_id, query):
-    """Cari e-book gratis dan tampilkan card hasil dengan tombol download."""
+def handle_book_search(chat_id, raw_input):
+    """Cari e-book gratis dengan flow informatif & fallback error yang jelas."""
+    # 1. Ekstrak metadata info dari link atau query
+    meta = book_res.get_google_book_info(raw_input)
+    book_title = meta.get("title") or raw_input.strip()
+    book_author = meta.get("author")
+    author_str = f"\n✍️ <b>Penulis:</b> {book_author}" if book_author else ""
+
     status_msg = send_msg(
         chat_id,
-        f"🔍 <b>Mencari E-Book:</b> <i>{query[:30]}...</i>\n"
+        f"📖 <b>Informasi Buku Terdeteksi:</b>\n"
         f"──────────────────────────\n"
-        f"⏳ Menghubungkan ke arsip open library & repositori publik...",
+        f"📚 <b>Judul:</b> {book_title}{author_str}\n\n"
+        f"⏳ <i>Menelusuri database arsip buku terbuka...</i>",
         reply_markup=back_keyboard()
     )
     status_id = (status_msg or {}).get("result", {}).get("message_id")
 
-    results = book_res.search_books(query, limit=5)
+    # 2. Cari di database arsip
+    results = book_res.search_books(book_title, limit=5)
+    
+    # 3. Handling Jika E-Book Belum Tersedia di Arsip Terbuka
     if not results:
         msg_not_found = (
-            f"❌ <b>E-Book Tidak Ditemukan</b>\n\n"
-            f"Tidak ditemukan file buku untuk: <code>{query}</code>\n"
-            f"💡 <i>Tips: Coba gunakan kata kunci judul yang lebih spesifik atau nama penulis.</i>"
+            f"❌ <b>E-Book Belum Tersedia di Arsip Terbuka</b>\n"
+            f"──────────────────────────\n"
+            f"📖 <b>Judul:</b> {book_title}{author_str}\n\n"
+            f"ℹ️ <b>Penyebab:</b>\n"
+            f"Buku ini masih terproteksi DRM penerbit dan belum diunggah ke arsip publik (Open Access).\n\n"
+            f"💡 <b>Solusi:</b>\n"
+            f"• Coba unduh via link <b>Scribd</b> jika dokumen tersedia di sana.\n"
+            f"• Atau cari dengan judul buku populer lainnya."
         )
+        not_found_keyboard = {
+            "inline_keyboard": [
+                [{"text": "📄 Panduan Mode Scribd", "callback_data": "btn_mode_scribd"}],
+                [{"text": "🔙 Kembali ke Menu Utama", "callback_data": "btn_start"}]
+            ]
+        }
         if status_id:
-            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": msg_not_found, "parse_mode": "HTML", "reply_markup": back_keyboard()})
+            tg_req("editMessageText", {"chat_id": chat_id, "message_id": status_id, "text": msg_not_found, "parse_mode": "HTML", "reply_markup": not_found_keyboard})
         else:
-            send_msg(chat_id, msg_not_found, reply_markup=back_keyboard())
+            send_msg(chat_id, msg_not_found, reply_markup=not_found_keyboard)
         return
 
-    # Buat tombol download per buku
+    # 4. Tampilkan Pilihan Download jika Berhasil Ditemukan
     buttons = []
     text_lines = [
-        f"📚 <b>Hasil Pencarian E-Book:</b>",
-        f"<i>Ditemukan {len(results)} dokumen siap unduh:</i>\n"
+        f"📚 <b>E-Book Ditemukan & Siap Unduh!</b>\n"
+        f"──────────────────────────\n"
+        f"📖 <b>Judul:</b> {book_title}{author_str}\n\n"
+        f"<i>Pilih versi & format dokumen di bawah:</i>\n"
     ]
     for i, b in enumerate(results):
         cache_key = f"{chat_id}_{i}"
         BOOK_SEARCH_CACHE[cache_key] = b
-        text_lines.append(f"<b>{i+1}. {b['title'][:40]}</b>")
-        text_lines.append(f"   ✍️ {b['creator']} • 📅 {b['year']} • 📁 {b['format']} ({b['size_mb']} MB)")
+        text_lines.append(f"<b>{i+1}. {b['title'][:38]}</b>")
+        text_lines.append(f"   📁 {b['format']} ({b['size_mb']} MB) • 📅 {b['year']}")
         
-        btn_label = f"📥 {i+1}. Unduh [{b['format']} - {b['size_mb']} MB]"
+        btn_label = f"📥 Unduh {b['format']} ({b['size_mb']} MB)"
         buttons.append([{"text": btn_label, "callback_data": f"dl_book_{i}"}])
 
     buttons.append([{"text": "🔙 Kembali ke Menu Utama", "callback_data": "btn_start"}])
